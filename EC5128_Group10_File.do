@@ -218,3 +218,45 @@ reg D.p_adjclose_BAB_L L.p_adjclose_BAB_L L(1/1)D.p_adjclose_BAB_L trading_day i
 estat ic
 reg D.p_adjclose_BAB_L L.p_adjclose_BAB_L L(1/2)D.p_adjclose_BAB_L trading_day if train == 1 & trading_day >= 5
 estat ic
+
+************************************************
+* QUESTION 6: Modelling the conditional mean
+************************************************
+
+* --- Training sample for all models ---
+local q6_sample "train == 1 & !missing(return_bab)"
+count if `q6_sample'
+assert r(N) == 2019
+
+* Figure 6.1: Babcock return ACF and PACF, training sample
+corrgram return_bab if `q6_sample', lags(20)
+ac return_bab if `q6_sample', lags(20) name(q6_acf, replace)
+pac return_bab if `q6_sample', lags(20) name(q6_pacf, replace)
+graph combine q6_acf q6_pacf, cols(2) xcommon ycommon xsize(10) ysize(4) name(q6_figure61, replace)
+
+* --- Candidate models and residual autocorrelation ---
+tempvar q6_u_mean q6_u_ar1 q6_u_ar14
+
+* Constant mean (ARMA(0,0))
+arima return_bab if `q6_sample', arima(0,0,0)
+assert e(sample) == (`q6_sample')
+estimates store q6_mean
+predict double `q6_u_mean' if e(sample), residuals
+corrgram `q6_u_mean' if e(sample), lags(20) noplot
+
+* AR(1)
+arima return_bab if `q6_sample', arima(1,0,0)
+assert e(sample) == (`q6_sample')
+estimates store q6_ar1
+predict double `q6_u_ar1' if e(sample), residuals
+corrgram `q6_u_ar1' if e(sample), lags(20) noplot
+
+* AR with lag 14 only
+arima return_bab if `q6_sample', ar(14)
+assert e(sample) == (`q6_sample')
+estimates store q6_ar_l14
+predict double `q6_u_ar14' if e(sample), residuals
+corrgram `q6_u_ar14' if e(sample), lags(20) noplot
+
+* Table 6.1: compare AIC and BIC on the common training sample
+estimates stats q6_mean q6_ar1 q6_ar_l14
