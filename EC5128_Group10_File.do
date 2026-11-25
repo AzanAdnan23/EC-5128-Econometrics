@@ -96,10 +96,125 @@ predict u, residuals
 predict yhat, xb
 
 * Heteroskedasticity: residuals vs fitted values graph
-rvfplot, yline(0)
+rvfplot, yline(0) title("Residuals vs Fitted Values") ytitle("Residual") xtitle("Fitted value")
+
 
 * Heteroskedasticity: Breusch-Pagan test (H0: constant variance)
 estat hettest, iid
 
 * Heteroskedasticity: White's test (H0: homoskedasticity)
 estat imtest, white
+
+* --- Autocorrelation ---
+* Re-estimate the Question 3 model so the tests below use it
+reg return_bab return_ftse i.weekdays
+
+* Graph: residuals over time (look for waves or zig-zags)
+twoway line u period, title("Residuals Over Time") ytitle("Residual") xtitle("Date") xlabel(#10, format(%tdCCYY))
+
+* Graph: today's residual against yesterday's residual (a sloping cloud = autocorrelation)
+scatter u L.u
+
+* Durbin-Watson test: first-order autocorrelation only (DW close to 2 = no autocorrelation)
+estat dwatson
+
+* Breusch-Godfrey test, 1 lag (yesterday); H0: no autocorrelation
+estat bgodfrey, lags(1) nomiss0
+
+* Breusch-Godfrey test, 5 lags (one trading week); H0: no autocorrelation
+estat bgodfrey, lags(5) nomiss0
+
+* --- Distribution of the residuals ---
+* Histogram of residuals with a normal curve on top
+hist u, normal title("Distribution of Residuals") xtitle("Residual") ytitle("Density")
+
+* Jarque-Bera test (H0: residuals are normal); install once with: ssc install jb
+jb u
+
+* Skewness and kurtosis test (another normality test)
+sktest u
+
+* Skewness and kurtosis values
+summarize u, detail
+
+* --- Functional form ---
+* Re-estimate the Question 3 model
+reg return_bab return_ftse i.weekdays
+
+* Ramsey RESET test (H0: no omitted variables / functional form is correct)
+estat ovtest
+
+* --- Response: robust standard errors ---
+* Q3 model with White's heteroskedasticity-robust standard errors
+reg return_bab return_ftse i.weekdays, robust
+
+* Re-test: is beta different from 1? (robust SEs)
+test return_ftse = 1
+
+* Re-test: joint F-test of the weekday dummies (robust SEs)
+test 2.weekdays 3.weekdays 4.weekdays 5.weekdays
+
+* Check: Newey-West standard errors (5 lags); force handles the 22-23 Dec 2020 gap
+newey return_bab return_ftse i.weekdays, lag(5) force
+
+test 2.weekdays 3.weekdays 4.weekdays 5.weekdays
+
+* --- Preferred final specification ---
+* Market model without weekday dummies (weekdays jointly insignificant), White robust SEs
+reg return_bab return_ftse, robust
+
+* Is beta different from 1? (robust SEs)
+test return_ftse = 1
+
+* Robustness check: Newey-West SEs (5 lags); force handles the 22-23 Dec 2020 gap
+newey return_bab return_ftse, lag(5) force
+
+************************************************
+* QUESTION 5: Stationarity
+************************************************
+
+* --- Part 2: 80:20 training/test split ---
+* Training = first 80% of Babcock returns (trading_day 2 to 2,020); test = final 20% (2,021 to 2,525)
+gen train = (trading_day <= 2020)
+gen test  = (trading_day >= 2021)
+
+* Check the sample sizes: should be 2,019 and 505
+count if train == 1 & !missing(return_bab)
+count if test == 1 & !missing(return_bab)
+
+* Check the split dates: 1 Oct 2024 (last training day) and 2 Oct 2024 (first test day)
+list period trading_day if trading_day == 2020 | trading_day == 2021
+
+* Figure 5.1: Babcock adjusted closing price, training sample
+twoway line p_adjclose_BAB_L period if train == 1, title("Babcock Adjusted Closing Price (Training Sample)") ytitle("Price (pence)") xtitle("Date") xlabel(#8, format(%tdCCYY))
+
+* Figure 5.2: Babcock daily log return, training sample
+twoway line return_bab period if train == 1, title("Babcock Daily Log Return (Training Sample)") ytitle("Log Return (in decimal)") xtitle("Date") xlabel(#8, format(%tdCCYY))
+
+* --- Dickey-Fuller tests on the training sample (H0: unit root = non-stationary) ---
+* Price: constant + trend version (clear downward trend); lags 0, 1, 2
+dfuller p_adjclose_BAB_L if train == 1, regress trend lags(0)
+dfuller p_adjclose_BAB_L if train == 1, regress trend lags(1)
+dfuller p_adjclose_BAB_L if train == 1, regress trend lags(2)
+
+* Return: no constant, no trend version (moves around 0); lags 0, 1, 2
+dfuller return_bab if train == 1, regress noconstant lags(0)
+dfuller return_bab if train == 1, regress noconstant lags(1)
+dfuller return_bab if train == 1, regress noconstant lags(2)
+
+* --- Lag choice: DF regressions by hand on the same sample (trading_day >= 5), then AIC/BIC ---
+* Return (no constant): lags 0, 1, 2
+reg D.return_bab L.return_bab if train == 1 & trading_day >= 5, noconstant
+estat ic
+reg D.return_bab L.return_bab L(1/1)D.return_bab if train == 1 & trading_day >= 5, noconstant
+estat ic
+reg D.return_bab L.return_bab L(1/2)D.return_bab if train == 1 & trading_day >= 5, noconstant
+estat ic
+
+* Price (constant + trend; trading_day is the trend term): lags 0, 1, 2
+reg D.p_adjclose_BAB_L L.p_adjclose_BAB_L trading_day if train == 1 & trading_day >= 5
+estat ic
+reg D.p_adjclose_BAB_L L.p_adjclose_BAB_L L(1/1)D.p_adjclose_BAB_L trading_day if train == 1 & trading_day >= 5
+estat ic
+reg D.p_adjclose_BAB_L L.p_adjclose_BAB_L L(1/2)D.p_adjclose_BAB_L trading_day if train == 1 & trading_day >= 5
+estat ic
