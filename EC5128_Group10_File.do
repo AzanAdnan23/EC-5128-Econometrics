@@ -11,16 +11,20 @@
 ************************************************
 clear all
 
-* Download daily adjusted closing prices for the FTSE 100 (^FTSE) and Babcock (BAB.L)
-* from Yahoo Finance, 1 Oct 2016 to 30 Sep 2026
-getsymbols ^FTSE BAB.L, fd(1) fm(10) fy(2016)  ld(30) lm(9) ly(2026) freq(d) yahoo clear price(adjclose)
+* Set Stata's working folder to the folder containing this do-file before running it.
+* Keep babcock_ftse_raw.dta in that folder to reproduce the reported results.
+* If downloading for the first time, install getsymbols with: ssc install getsymbols
 
-* Working folder: CHANGE this path to your own folder before running
-cd "/Users/john/Documents/FIN/EC-5128/Raw_data"
-
-* Save a copy of the raw data (Stata format and CSV)
-save babcock_ftse_raw, replace
-export delimited using babcock_ftse_raw.csv, replace
+* Load the saved Yahoo Finance data. Download and save the data if the file is missing.
+capture confirm file "babcock_ftse_raw.dta"
+if _rc == 0 {
+    use "babcock_ftse_raw.dta", clear
+}
+else {
+    getsymbols ^FTSE BAB.L, fd(1) fm(10) fy(2016)  ld(30) lm(9) ly(2026) freq(d) yahoo clear price(adjclose)
+    save babcock_ftse_raw, replace
+    export delimited using babcock_ftse_raw.csv, replace
+}
 
 * Missing data check: the FTSE 100 price is missing on 22 Dec 2020 (left as missing)
 list if missing(p_adjclose__FTSE )
@@ -128,8 +132,11 @@ estat bgodfrey, lags(5) nomiss0
 * Histogram of residuals with a normal curve on top
 hist u, normal title("Distribution of Residuals") xtitle("Residual") ytitle("Density")
 
-* Jarque-Bera test (H0: residuals are normal); install once with: ssc install jb
-jb u
+* Jarque-Bera test (H0: residuals are normal), if jb is installed
+capture which jb
+if _rc == 0 {
+    jb u
+}
 
 * Skewness and kurtosis test (another normality test)
 sktest u
@@ -218,3 +225,81 @@ reg D.p_adjclose_BAB_L L.p_adjclose_BAB_L L(1/1)D.p_adjclose_BAB_L trading_day i
 estat ic
 reg D.p_adjclose_BAB_L L.p_adjclose_BAB_L L(1/2)D.p_adjclose_BAB_L trading_day if train == 1 & trading_day >= 5
 estat ic
+
+************************************************
+* QUESTION 6: Modelling the conditional mean
+************************************************
+
+* Figure 6.1: Babcock return ACF and PACF, training sample
+corrgram return_bab if train == 1 & !missing(return_bab), lags(20)
+ac return_bab if train == 1 & !missing(return_bab), lags(20)
+pac return_bab if train == 1 & !missing(return_bab), lags(20)
+
+* Constant mean (ARMA(0,0))
+arima return_bab if train == 1 & !missing(return_bab), arima(0,0,0)
+estimates store q6_mean
+predict q6_resid_mean if train == 1 & !missing(return_bab), residuals
+corrgram q6_resid_mean, lags(20)
+
+* AR(1)
+arima return_bab if train == 1 & !missing(return_bab), arima(1,0,0)
+estimates store q6_ar1
+predict q6_resid_ar1 if train == 1 & !missing(return_bab), residuals
+corrgram q6_resid_ar1, lags(20)
+
+* AR with lag 14 only
+arima return_bab if train == 1 & !missing(return_bab), ar(14)
+estimates store q6_ar_l14
+predict q6_resid_ar14 if train == 1 & !missing(return_bab), residuals
+corrgram q6_resid_ar14, lags(20)
+
+* Table 6.1: compare AIC and BIC on the common training sample
+estimates stats q6_mean q6_ar1 q6_ar_l14
+
+************************************************
+* QUESTION 7: Can you forecast stock returns?
+************************************************
+
+* --- One-step-ahead forecasts ---
+* Estimate the selected lag-14 model on the Q5 training sample.
+arima return_bab if train == 1 & !missing(return_bab), ar(14)
+
+* Predict on the full series so early test forecasts use the training history.
+predict forecast_ar14, xb
+tsline return_bab forecast_ar14 if test == 1
+
+* --- Forecast errors and RMSE ---
+* Forecast error is actual return minus forecast. Evaluate on the test sample.
+gen sq_error_ar14 = (return_bab - forecast_ar14)^2 if test == 1
+gen sq_error_zero = return_bab^2 if test == 1
+
+* Use the training-sample mean as the constant forecast.
+summarize return_bab if train == 1, meanonly
+gen forecast_mean = r(mean) if test == 1
+gen sq_error_mean = (return_bab - forecast_mean)^2 if test == 1
+
+* Table 7.1: RMSE on the common test sample
+summarize sq_error_ar14 if test == 1, meanonly
+display "RMSE - AR lag 14: " %9.6f sqrt(r(mean))
+
+summarize sq_error_zero if test == 1, meanonly
+display "RMSE - Zero return: " %9.6f sqrt(r(mean))
+
+summarize sq_error_mean if test == 1, meanonly
+display "RMSE - Training mean: " %9.6f sqrt(r(mean))
+
+************************************************
+* QUESTION 8: Is volatility predictable?
+************************************************
+
+* Use the Q6 lag-14 mean model and the same training sample.
+arima return_bab if train == 1 & !missing(return_bab), ar(14)
+predict q8_resid if train == 1 & !missing(return_bab), residuals
+
+* Figure 8.1: plot the residuals to look for volatility clustering.
+tsline q8_resid if train == 1
+
+* Use the Class 6 intercept-only regression to test the ARIMA residuals.
+* Lag 1 checks the previous trading day. Lags 1 to 5 jointly cover one trading week.
+regress q8_resid
+estat archlm, lags(1 5)
